@@ -46,6 +46,7 @@ func (h *WebSocketHandlers) HandleASRWebSocket(c echo.Context) error {
 		zap.L().Error("Failed to upgrade to WebSocket", zap.Error(err))
 		return err
 	}
+	defer ws.Close()
 	// Use AI service to handle ASR WebSocket connection
 	if err := h.aiClient.HandleASR(c.Request().Context(), ws); err != nil {
 		zap.L().Error("ASR WebSocket error", zap.Error(err))

@@ -2,17 +2,12 @@ import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
 const CopyPlugin = require("copy-webpack-plugin");
 
-// 阿里云 oss 配置
-const ossUrl = `${process.env.OSS_BUCKET}.${process.env.OSS_REGION}.aliyuncs.com`;
-
 const nextConfig: NextConfig = {
   output: "standalone",
   images: {
+    // 后端返回的预签名 URL 可能来自任意 S3 兼容 endpoint。
+    unoptimized: true,
     remotePatterns: [
-      {
-        protocol: "https",
-        hostname: ossUrl,
-      },
       {
         protocol: "https",
         hostname: "api.dicebear.com",

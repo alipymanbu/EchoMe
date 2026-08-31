@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/justin/echome-be/internal/domain/ai"
+	"github.com/justin/echome-be/internal/infra/llmtools"
 	"go.uber.org/zap"
 )
 
@@ -52,27 +53,6 @@ func (client *AliClient) doRequestWithRetry(req *http.Request, maxRetries int) (
 	}
 
 	return nil, fmt.Errorf("request failed after %d retries: %w", maxRetries, lastErr)
-}
-
-// 定义搜索工具描述
-func getSearchTool() map[string]any {
-	return map[string]any{
-		"type": "function",
-		"function": map[string]any{
-			"name":        "perform_search",
-			"description": "用于获取最新信息，回答需要联网获取的问题",
-			"parameters": map[string]any{
-				"type": "object",
-				"properties": map[string]any{
-					"query": map[string]any{
-						"type":        "string",
-						"description": "搜索查询词",
-					},
-				},
-				"required": []string{"query"},
-			},
-		},
-	}
 }
 
 // GenerateResponse LLM响应
@@ -124,32 +104,54 @@ func (client *AliClient) GenerateResponse(ctx context.Context, msg ai.DashScopeC
 
 	// 构建请求
 	request := ai.DashScopeChatRequest{
-		Messages: messages,
-		Stream:   true,
+		Model:        msg.Model,
+		Messages:     messages,
+		Stream:       true,
+		EnableSearch: msg.EnableSearch,
+		Tools:        append([]map[string]any(nil), msg.Tools...),
 	}
 
 	if request.Model == "" {
 		request.Model = model
 	}
 
-	// 如果启用了搜索功能，添加搜索工具
+	// 如果启用了搜索功能，添加标准 Tavily 工具
 	if msg.EnableSearch {
-		// 不再直接在请求中设置EnableSearch，而是通过工具调用让LLM决定
-		request.Tools = append(request.Tools, getSearchTool())
+		request.Tools = append(request.Tools, llmtools.TavilySearchTool())
 	}
+	return client.generateResponse(ctx, request, onChunk)
+}
 
-	// 序列化请求
+type aliyunStreamChunk struct {
+	Choices []struct {
+		Delta struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
+		} `json:"delta"`
+	} `json:"choices"`
+}
+
+func (client *AliClient) generateResponse(ctx context.Context, request ai.DashScopeChatRequest, onChunk func(string) error) error {
 	requestBody, err := json.Marshal(request)
-	zap.L().Warn("Request body", zap.String("body", string(requestBody)))
 	if err != nil {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	// 创建HTTP请求
-	url := "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
-	req, err := http.NewRequestWithContext(ctx, "POST", url, bytes.NewBuffer(requestBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, compatibleEndpoint(client.endPoint), bytes.NewReader(requestBody))
 	if err != nil {
 		return fmt.Errorf("failed to create request: %w", err)
+	}
+	req.GetBody = func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(requestBody)), nil
 	}
 
 	// 设置请求头
@@ -157,8 +159,7 @@ func (client *AliClient) GenerateResponse(ctx context.Context, msg ai.DashScopeC
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 
-	// 发送请求
-	resp, err := client.doRequestWithRetry(req, 3)
+	resp, err := client.doRequestWithRetry(req, client.maxRetries)
 	if err != nil {
 		return fmt.Errorf("failed to send request: %w", err)
 	}
@@ -173,9 +174,9 @@ func (client *AliClient) GenerateResponse(ctx context.Context, msg ai.DashScopeC
 		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(responseBody))
 	}
 
-	// 处理流式响应
+	toolCalls := make(map[int]*llmtools.ToolCall)
+	var reasoningContent strings.Builder
 	reader := bufio.NewReader(resp.Body)
-	zap.L().Info("Starting to process streaming response using DashScope compatible mode")
 
 	for {
 		// 检查上下文是否已取消
@@ -218,8 +219,7 @@ func (client *AliClient) GenerateResponse(ctx context.Context, msg ai.DashScopeC
 				break
 			}
 
-			// 解析JSON
-			var chunk ai.DashScopeStreamChunk
+			var chunk aliyunStreamChunk
 			if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
 				zap.L().Warn("Failed to unmarshal stream chunk", zap.Error(err), zap.String("json_data", jsonData))
 				continue
@@ -229,55 +229,23 @@ func (client *AliClient) GenerateResponse(ctx context.Context, msg ai.DashScopeC
 			if len(chunk.Choices) > 0 {
 				choice := chunk.Choices[0]
 				content := choice.Delta.Content
-				toolCalls := choice.Delta.ToolCalls
-
-				// 检查是否有工具调用请求
-				if len(toolCalls) > 0 {
-					zap.L().Info("Received tool call request", zap.Int("count", len(toolCalls)))
-
-					// 处理工具调用
-					for _, toolCall := range toolCalls {
-						if toolCall.Name == "perform_search" && client.tavilyAPIKey != "" {
-							// 获取搜索查询词
-							query, ok := toolCall.Parameters["query"].(string)
-							if !ok {
-								zap.L().Error("Invalid search query parameter")
-								continue
-							}
-
-							// 执行搜索
-							zap.L().Info("Performing search", zap.String("query", query))
-							searchContext, err := client.PerformSearchWithAPIKey(query)
-							if err != nil {
-								zap.L().Error("Search failed", zap.Error(err))
-								if err := onChunk("搜索失败，请稍后再试。"); err != nil {
-									return fmt.Errorf("callback error: %w", err)
-								}
-								continue
-							}
-
-							// 将搜索结果作为系统消息添加到会话
-							messages = append(messages, map[string]any{
-								"role":    "system",
-								"content": "搜索结果：" + searchContext,
-							})
-
-							// 构建包含搜索结果的新请求
-							toolResponseReq := ai.DashScopeChatRequest{
-								Model:    model,
-								Messages: messages,
-								Stream:   true,
-							}
-
-							// 重新调用LLM生成响应
-							if err := client.continueWithToolResponse(ctx, toolResponseReq, onChunk); err != nil {
-								return err
-							}
-
-							// 处理完成后退出循环
-							return nil
-						}
+				reasoningContent.WriteString(choice.Delta.ReasoningContent)
+				for _, delta := range choice.Delta.ToolCalls {
+					call := toolCalls[delta.Index]
+					if call == nil {
+						call = &llmtools.ToolCall{Index: delta.Index}
+						toolCalls[delta.Index] = call
 					}
+					if delta.ID != "" {
+						call.ID = delta.ID
+					}
+					if delta.Type != "" {
+						call.Type = delta.Type
+					}
+					if delta.Function.Name != "" {
+						call.Name = delta.Function.Name
+					}
+					call.Arguments += delta.Function.Arguments
 				}
 
 				// 如果有文本内容，通过回调函数返回
@@ -290,9 +258,49 @@ func (client *AliClient) GenerateResponse(ctx context.Context, msg ai.DashScopeC
 		}
 	}
 
-	zap.L().Info("Streaming response processing completed using DashScope compatible mode")
+	if len(toolCalls) == 0 || !request.EnableSearch {
+		return nil
+	}
 
-	return nil
+	calls := make([]llmtools.ToolCall, 0, len(toolCalls))
+	for index := 0; index < len(toolCalls); index++ {
+		if call, ok := toolCalls[index]; ok {
+			calls = append(calls, *call)
+		}
+	}
+	results := make(map[string]string, len(calls))
+	for index, call := range calls {
+		if !llmtools.IsTavilySearch(call) {
+			continue
+		}
+		query, err := llmtools.SearchQuery(call.Arguments)
+		if err != nil {
+			return err
+		}
+		searchContext, err := client.PerformSearch(ctx, query, client.tavilyAPIKey)
+		if err != nil {
+			return fmt.Errorf("Tavily search: %w", err)
+		}
+		id := call.ID
+		if id == "" {
+			id = fmt.Sprintf("tavily_call_%d", index)
+		}
+		results[id] = searchContext
+	}
+	followUp := request
+	followUp.Messages = llmtools.AppendToolResults(request.Messages, calls, results, reasoningContent.String())
+	followUp.EnableSearch = false
+	followUp.Tools = nil
+	return client.generateResponse(ctx, followUp, onChunk)
+}
+
+func compatibleEndpoint(endpoint string) string {
+	base := strings.TrimRight(endpoint, "/")
+	if base == "" {
+		base = "https://dashscope.aliyuncs.com"
+	}
+	base = strings.TrimSuffix(base, "/compatible-mode/v1/chat/completions")
+	return base + "/compatible-mode/v1/chat/completions"
 }
 
 // PerformSearchWithAPIKey 使用Tavily API执行搜索
@@ -352,104 +360,4 @@ func (client *AliClient) PerformSearchWithAPIKey(query string) (string, error) {
 	}
 
 	return resultText.String(), nil
-}
-
-// continueWithToolResponse 处理带有工具调用结果的后续请求
-func (client *AliClient) continueWithToolResponse(ctx context.Context, req ai.DashScopeChatRequest, onChunk func(string) error) error {
-	// 构建请求体
-	requestBody, err := json.Marshal(req)
-	if err != nil {
-		zap.L().Error("Failed to marshal request body", zap.Error(err))
-		return fmt.Errorf("failed to marshal request body: %w", err)
-	}
-
-	// 创建HTTP请求
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", client.endPoint, bytes.NewBuffer(requestBody))
-	if err != nil {
-		zap.L().Error("Failed to create HTTP request", zap.Error(err))
-		return fmt.Errorf("failed to create HTTP request: %w", err)
-	}
-
-	// 设置请求头
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+client.apiKey)
-
-	// 执行请求（带重试）
-	resp, err := client.doRequestWithRetry(httpReq, client.maxRetries)
-	if err != nil {
-		zap.L().Error("Request failed after retries", zap.Error(err))
-		return fmt.Errorf("request failed after retries: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// 处理流式响应
-	return client.handleStreamingResponse(ctx, resp, onChunk)
-}
-
-// handleStreamingResponse 处理流式响应
-func (client *AliClient) handleStreamingResponse(ctx context.Context, resp *http.Response, onChunk func(string) error) error {
-	reader := bufio.NewReader(resp.Body)
-
-	for {
-		select {
-		case <-ctx.Done():
-			zap.L().Info("Streaming context canceled")
-			return ctx.Err()
-		default:
-		}
-
-		// 读取一行数据
-		line, err := reader.ReadString('\n')
-		if err != nil {
-			if err == io.EOF {
-				// 流结束
-				zap.L().Info("Reached end of streaming response")
-				break
-			}
-			zap.L().Error("Error reading stream line", zap.Error(err))
-			return fmt.Errorf("failed to read stream: %w", err)
-		}
-
-		// 跳过空行
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-
-		// 检查是否是数据行（固定格式：data: 开头）
-		const dataPrefix = "data: "
-		if strings.HasPrefix(line, dataPrefix) {
-			// 提取JSON数据（直接去掉固定前缀）
-			jsonData := line[len(dataPrefix):]
-
-			// 检查是否是结束标记
-			if jsonData == "[DONE]" {
-				break
-			}
-
-			// 解析JSON
-			var chunk ai.DashScopeStreamChunk
-			if err := json.Unmarshal([]byte(jsonData), &chunk); err != nil {
-				zap.L().Warn("Failed to unmarshal stream chunk", zap.Error(err), zap.String("json_data", jsonData))
-				continue
-			}
-
-			// 处理内容块
-			if len(chunk.Choices) > 0 {
-				choice := chunk.Choices[0]
-				content := choice.Delta.Content
-
-				// 如果有文本内容，通过回调函数返回
-				if content != "" {
-					if err := onChunk(content); err != nil {
-						return fmt.Errorf("callback error: %w", err)
-					}
-				}
-			}
-		}
-	}
-
-	zap.L().Info("Streaming response processing completed for tool response")
-
-	return nil
 }

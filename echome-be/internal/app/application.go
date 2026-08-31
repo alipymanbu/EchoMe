@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/justin/echome-be/config"
+	"github.com/justin/echome-be/internal/domain/storage"
 	"github.com/justin/echome-be/internal/handler"
 	"github.com/justin/echome-be/internal/middleware"
 	"github.com/justin/echome-be/internal/validation"
@@ -27,12 +28,13 @@ import (
 type Application struct {
 	config    *config.Config
 	handler   *handler.Handlers
+	storage   storage.ObjectStorage
 	echo      *echo.Echo
 	validator *validation.ConfigValidator
 }
 
 // NewApplication 初始化应用
-func NewApplication(cfg *config.Config, h *handler.Handlers) *Application {
+func NewApplication(cfg *config.Config, h *handler.Handlers, objectStorage storage.ObjectStorage) *Application {
 	e := echo.New()
 
 	// 注册中间件
@@ -53,9 +55,16 @@ func NewApplication(cfg *config.Config, h *handler.Handlers) *Application {
 	return &Application{
 		config:    cfg,
 		handler:   h,
+		storage:   objectStorage,
 		echo:      e,
 		validator: validation.NewConfigValidator(),
 	}
+}
+
+// GetObjectStorage exposes the configured object storage for future handlers
+// and application services without coupling them to the S3 SDK.
+func (a *Application) GetObjectStorage() storage.ObjectStorage {
+	return a.storage
 }
 
 // GetEcho 获取 Echo 实例（用于测试）
@@ -80,7 +89,9 @@ func (a *Application) Run() error {
 			zap.String("端口", a.config.Server.Port),
 			zap.String("API文档", fmt.Sprintf("http://localhost:%s/swagger/", a.config.Server.Port)),
 			zap.String("健康检查", fmt.Sprintf("http://localhost:%s/health", a.config.Server.Port)),
-			zap.String("AI服务", a.config.AI.ServiceType),
+			zap.String("ASR服务", a.config.AI.ASR.Provider),
+			zap.String("TTS服务", a.config.AI.TTS.Provider),
+			zap.String("LLM服务", a.config.AI.LLM.Provider),
 		)
 
 		server := &http.Server{

@@ -7,9 +7,13 @@ import (
 var ConfigProviderSet = wire.NewSet(
 	Load,
 	GetDatabaseConfig,
-	GetTavilyConfig,
+	GetMaxUploadSize,
 )
 
 func GetTavilyConfig(cfg *Config) *TavilyConfig {
 	return &cfg.Tavily
+}
+
+func GetMaxUploadSize(cfg *Config) int64 {
+	return cfg.S3.MaxUploadSize
 }

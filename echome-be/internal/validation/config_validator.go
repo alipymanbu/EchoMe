@@ -27,8 +27,8 @@ func (v *ConfigValidator) ValidateConfig(cfg *config.Config) error {
 		return fmt.Errorf("AI config validation failed: %w", err)
 	}
 
-	if err := v.validateAliyunConfig(cfg); err != nil {
-		return fmt.Errorf("aliyun config validation failed: %w", err)
+	if err := v.validateProviderConfig(cfg); err != nil {
+		return fmt.Errorf("provider config validation failed: %w", err)
 	}
 
 	return nil
@@ -52,16 +52,6 @@ func (v *ConfigValidator) validateServerConfig(cfg *config.Config) error {
 
 // validateAIConfig 验证AI配置
 func (v *ConfigValidator) validateAIConfig(cfg *config.Config) error {
-	if cfg.AI.ServiceType == "" {
-		return fmt.Errorf("AI service type is required")
-	}
-
-	supportedTypes := []string{"alibailian"}
-	if !v.contains(supportedTypes, cfg.AI.ServiceType) {
-		return fmt.Errorf("unsupported AI service type: %s, supported types: %s",
-			cfg.AI.ServiceType, strings.Join(supportedTypes, ", "))
-	}
-
 	// 验证超时配置
 	if cfg.AI.Timeout < 0 {
 		return fmt.Errorf("AI timeout cannot be negative: %d", cfg.AI.Timeout)
@@ -71,51 +61,78 @@ func (v *ConfigValidator) validateAIConfig(cfg *config.Config) error {
 		return fmt.Errorf("AI max retries cannot be negative: %d", cfg.AI.MaxRetries)
 	}
 
-	return nil
-}
-
-// validateAliyunConfig 验证阿里云配置
-func (v *ConfigValidator) validateAliyunConfig(cfg *config.Config) error {
-	if cfg.AI.ServiceType == "alibailian" {
-		if cfg.Aliyun.APIKey == "" {
-
-			return fmt.Errorf("aliyun API key is required for alibailian service")
-		}
-
-		if cfg.Aliyun.Endpoint == "" {
-			return fmt.Errorf("aliyun endpoint is required")
-		}
-
-		// 验证endpoint格式
-		if _, err := url.Parse(cfg.Aliyun.Endpoint); err != nil {
-			return fmt.Errorf("invalid Aliyun endpoint format: %s", cfg.Aliyun.Endpoint)
-		}
-
-		if cfg.Aliyun.Region == "" {
-			return fmt.Errorf("aliyun region is required")
-		}
-
-		// 验证ASR配置
-		if err := v.validateASRConfig(&cfg.Aliyun.ASR); err != nil {
-			return fmt.Errorf("ASR config validation failed: %w", err)
-		}
-
-		// 验证TTS配置
-		if err := v.validateTTSConfig(&cfg.Aliyun.TTS); err != nil {
-			return fmt.Errorf("TTS config validation failed: %w", err)
-		}
-
-		// 验证LLM配置
-		if err := v.validateLLMConfig(&cfg.Aliyun.LLM); err != nil {
-			return fmt.Errorf("LLM config validation failed: %w", err)
-		}
+	if err := v.validateProvider(cfg.AI.ASR.Provider, []string{"aliyun", "mimo"}); err != nil {
+		return fmt.Errorf("ASR provider: %w", err)
+	}
+	if err := v.validateProvider(cfg.AI.TTS.Provider, []string{"mimo", "aliyun"}); err != nil {
+		return fmt.Errorf("TTS provider: %w", err)
+	}
+	if err := v.validateProvider(cfg.AI.LLM.Provider, []string{"aliyun", "mimo"}); err != nil {
+		return fmt.Errorf("LLM provider: %w", err)
+	}
+	if err := v.validateASRConfig(&cfg.AI.ASR); err != nil {
+		return err
+	}
+	if err := v.validateTTSConfig(&cfg.AI.TTS); err != nil {
+		return err
+	}
+	if err := v.validateLLMConfig(&cfg.AI.LLM); err != nil {
+		return err
 	}
 
 	return nil
 }
 
+// validateProviderConfig validates credentials only for selected providers.
+func (v *ConfigValidator) validateProviderConfig(cfg *config.Config) error {
+	if usesProvider(cfg.AI.ASR.Provider, "aliyun", "aliyun") || usesProvider(cfg.AI.LLM.Provider, "aliyun", "aliyun") || usesProvider(cfg.AI.TTS.Provider, "aliyun", "mimo") {
+		if err := v.validateEndpointAndKey("aliyun", cfg.Providers.Aliyun); err != nil {
+			return err
+		}
+	}
+	if usesProvider(cfg.AI.ASR.Provider, "mimo", "aliyun") || usesProvider(cfg.AI.LLM.Provider, "mimo", "aliyun") || usesProvider(cfg.AI.TTS.Provider, "mimo", "mimo") {
+		if err := v.validateEndpointAndKey("mimo", cfg.Providers.Mimo); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v *ConfigValidator) validateEndpointAndKey(name string, provider config.ProviderConfig) error {
+	if provider.APIKey == "" {
+		return fmt.Errorf("%s API key is required", name)
+	}
+	if provider.Endpoint == "" {
+		return fmt.Errorf("%s endpoint is required", name)
+	}
+	parsed, err := url.Parse(provider.Endpoint)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return fmt.Errorf("invalid %s endpoint format: %s", name, provider.Endpoint)
+	}
+	return nil
+}
+
+func (v *ConfigValidator) validateProvider(provider string, supported []string) error {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return nil
+	}
+	if !v.contains(supported, provider) {
+		return fmt.Errorf("unsupported provider %q, supported: %s", provider, strings.Join(supported, ", "))
+	}
+	return nil
+}
+
+func usesProvider(provider string, expected string, fallback string) bool {
+	provider = strings.ToLower(strings.TrimSpace(provider))
+	if provider == "" {
+		return fallback == expected
+	}
+	return provider == expected
+}
+
 // validateASRConfig 验证ASR配置
-func (v *ConfigValidator) validateASRConfig(asr *config.ASRServiceConfig) error {
+func (v *ConfigValidator) validateASRConfig(asr *config.ASRConfig) error {
 	if asr.SampleRate <= 0 {
 		return fmt.Errorf("ASR sample rate must be positive: %d", asr.SampleRate)
 	}
@@ -130,22 +147,22 @@ func (v *ConfigValidator) validateASRConfig(asr *config.ASRServiceConfig) error 
 }
 
 // validateTTSConfig 验证TTS配置
-func (v *ConfigValidator) validateTTSConfig(tts *config.TTSServiceConfig) error {
+func (v *ConfigValidator) validateTTSConfig(tts *config.TTSConfig) error {
 	if tts.SampleRate <= 0 {
 		return fmt.Errorf("TTS sample rate must be positive: %d", tts.SampleRate)
 	}
 
-	supportedFormats := []string{"pcm", "wav", "mp3"}
-	if tts.ResponseFormat != "" && !v.contains(supportedFormats, tts.ResponseFormat) {
+	supportedFormats := []string{"pcm16", "pcm", "wav", "mp3"}
+	if tts.Format != "" && !v.contains(supportedFormats, tts.Format) {
 		return fmt.Errorf("unsupported TTS response format: %s, supported: %s",
-			tts.ResponseFormat, strings.Join(supportedFormats, ", "))
+			tts.Format, strings.Join(supportedFormats, ", "))
 	}
 
 	return nil
 }
 
 // validateLLMConfig 验证LLM配置
-func (v *ConfigValidator) validateLLMConfig(llm *config.LLMServiceConfig) error {
+func (v *ConfigValidator) validateLLMConfig(llm *config.LLMConfig) error {
 	if llm.Temperature < 0 || llm.Temperature > 2 {
 		return fmt.Errorf("LLM temperature must be between 0 and 2: %f", llm.Temperature)
 	}

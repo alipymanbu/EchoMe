@@ -18,16 +18,36 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// HandleTTS 处理 TTS 请求，直接使用传入的文本
-func (client *AliClient) HandleTTS(ctx context.Context, clientWS ws.WebSocketConn, text string, config ai.TTSConfig) error {
-	textCh := make(chan string, 1)
-	textCh <- text
-	close(textCh)
-	return client.HandleCosyVoiceTTS(ctx, clientWS, textCh, config)
+// HandleTTS 处理 TTS 请求。
+func (client *AliClient) HandleTTS(ctx context.Context, clientWS ws.WebSocketConn, textStream <-chan string, config ai.TTSConfig) error {
+	config = mergeTTSConfig(client.ttsConfig, config)
+	return client.HandleCosyVoiceTTS(ctx, clientWS, textStream, config)
+}
+
+func mergeTTSConfig(defaults, overrides ai.TTSConfig) ai.TTSConfig {
+	if overrides.Model == "" {
+		overrides.Model = defaults.Model
+	}
+	if overrides.Voice == "" {
+		overrides.Voice = defaults.Voice
+	}
+	if overrides.Format == "" {
+		overrides.Format = defaults.Format
+	}
+	if overrides.SampleRate <= 0 {
+		overrides.SampleRate = defaults.SampleRate
+	}
+	if overrides.SampleRate <= 0 {
+		overrides.SampleRate = 22050
+	}
+	if overrides.Format == "" {
+		overrides.Format = "pcm"
+	}
+	return overrides
 }
 
 func (client *AliClient) HandleCosyVoiceTTS(ctx context.Context, clientWS ws.WebSocketConn, textStream <-chan string, config ai.TTSConfig) error {
-	aliWS, err := connectToAliyunTTS(client.apiKey)
+	aliWS, err := connectToAliyunTTS(client.endPoint, client.apiKey)
 	if err != nil {
 		return fmt.Errorf("连接阿里云 TTS 失败: %w", err)
 	}
@@ -77,8 +97,8 @@ func (client *AliClient) HandleCosyVoiceTTS(ctx context.Context, clientWS ws.Web
 }
 
 // connectToAliyunTTS 建立 WebSocket 连接
-func connectToAliyunTTS(apiKey string) (*websocket.Conn, error) {
-	url := "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+func connectToAliyunTTS(endpoint string, apiKey string) (*websocket.Conn, error) {
+	url := websocketEndpoint(endpoint)
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 30 * time.Second,
@@ -119,7 +139,7 @@ func sendRunTask(ws *websocket.Conn, taskID string, config ai.TTSConfig) error {
 				"text_type":   "PlainText",
 				"voice":       config.Voice,
 				"format":      config.Format,
-				"sample_rate": 22050,
+				"sample_rate": config.SampleRate,
 			},
 			"input": map[string]any{},
 		},

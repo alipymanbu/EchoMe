@@ -467,11 +467,8 @@ EchoMe/
 
 ### 前端环境变量
 ```bash
-# 阿里云 OSS 配置
-OSS_BUCKET=your-bucket-name
-OSS_REGION=oss-cn-hangzhou
-OSS_ACCESS_KEY_ID=your-access-key
-OSS_ACCESS_KEY_SECRET=your-secret-key
+# 前端不再需要 OSS 密钥，文件上传由后端负责
+API_BASE_URL=http://localhost:8081
 ```
 
 ### 后端配置文件
@@ -480,21 +477,40 @@ server:
   port: "8080"
 
 ai:
-  service_type: "aliyun"
   timeout: 30
+  asr:
+    provider: "mimo"
+    model: "mimo-v2.5-asr"
+    sample_rate: 16000
+    format: "pcm"
+  tts:
+    provider: "mimo"
+    model: "mimo-v2.5-tts"
+    voice: "mimo_default"
+    sample_rate: 24000
+    format: "pcm16"
+    min_segment_runes: 12
+    max_segment_runes: 100
+    max_segment_wait_ms: 800
+  llm:
+    provider: "mimo"
+    model: "mimo-v2.5"
 
-aliyun:
-  region: "cn-hangzhou"
-  access_key_id: "your-access-key"
-  access_key_secret: "your-secret-key"
-  app_key: "your-app-key"
+providers:
+  aliyun:
+    api_key: "your-alibailian-api-key"
+    endpoint: "https://dashscope.aliyuncs.com"
+    region: "cn-beijing"
+  mimo:
+    api_key: "your-mimo-api-key"
+    endpoint: "https://api.xiaomimimo.com/v1"
 
 database:
   host: "localhost"
   port: 5432
   user: "postgres"
   password: "your-password"
-  dbname: "echome"
+  db_name: "echome"
 ```
 
 ---

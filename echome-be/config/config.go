@@ -8,14 +8,11 @@ type Config struct {
 	WebRTC struct {
 		STUNServer string `mapstructure:"stun_server"`
 	} `mapstructure:"webrtc"`
-	AI struct {
-		ServiceType string `mapstructure:"service_type"`
-		Timeout     int    `mapstructure:"timeout"`
-		MaxRetries  int    `mapstructure:"max_retries"`
-	} `mapstructure:"ai"`
-	Aliyun   Aliyun         `mapstructure:"aliyun"`
-	Tavily   TavilyConfig   `mapstructure:"tavily"`
-	Database DatabaseConfig `mapstructure:"database"`
+	AI        AIConfig        `mapstructure:"ai"`
+	Providers ProvidersConfig `mapstructure:"providers"`
+	Tavily    TavilyConfig    `mapstructure:"tavily"`
+	Database  DatabaseConfig  `mapstructure:"database"`
+	S3        S3Config        `mapstructure:"s3"`
 }
 
 // TavilyConfig holds Tavily API configuration

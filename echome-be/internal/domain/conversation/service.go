@@ -8,11 +8,9 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
-	"github.com/justin/echome-be/config"
 	"github.com/justin/echome-be/internal/domain/ai"
 	"github.com/justin/echome-be/internal/domain/character"
 	"github.com/justin/echome-be/internal/domain/ws"
-	"github.com/justin/echome-be/internal/infra/aliyun"
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
 )
@@ -26,20 +24,20 @@ const (
 // ConversationService 会话服务实现
 type ConversationService struct {
 	aiClient         ai.Repo
+	ttsClient        ai.TTSProvider
 	characterService *character.CharacterService
-	tavilyConfig     *config.TavilyConfig
 }
 
 // NewConversationService 创建会话服务
 func NewConversationService(
 	aiClient ai.Repo,
+	ttsClient ai.TTSProvider,
 	characterService *character.CharacterService,
-	tavilyConfig *config.TavilyConfig,
 ) *ConversationService {
 	return &ConversationService{
 		aiClient:         aiClient,
+		ttsClient:        ttsClient,
 		characterService: characterService,
-		tavilyConfig:     tavilyConfig,
 	}
 }
 
@@ -102,20 +100,6 @@ func (s *ConversationService) handleVoiceConversationFlow(ctx context.Context, s
 				continue
 			}
 
-			if msg.EnableSearch {
-				if len(msg.Messages) > 0 {
-					lastMessage := msg.Messages[len(msg.Messages)-1]
-					if content, ok := lastMessage["content"].(string); ok {
-						searchContext, err := s.aiClient.PerformSearch(ctx, content, s.tavilyConfig.APIKey)
-						if err != nil {
-							zap.L().Error("perform search failed", zap.Error(err))
-						} else {
-							msg.Messages = append(msg.Messages, map[string]any{"role": "system", "content": searchContext})
-						}
-					}
-				}
-			}
-
 			if err := s.handleStreamingConversation(ctx, sc, msg, character); err != nil {
 				zap.L().Error("流式对话处理失败", zap.Error(err))
 				continue
@@ -137,16 +121,15 @@ func (s *ConversationService) handleStreamingConversation(
 
 	llmTextChan := make(chan string, 100) // Buffered channel for LLM text chunks
 
-	ttsConfig := aliyun.DefaultTTSConfig()
-	if character != nil && character.Flag && character.Voice != nil {
-		ttsConfig.Voice = *character.Voice
-	}
+	// MiMo TTS uses its configured preset voice. Existing character.Voice values
+	// are Aliyun voice IDs and are not compatible with MiMo.
+	ttsConfig := ai.TTSConfig{}
 
 	g, ctx := errgroup.WithContext(ctx)
 
 	// Goroutine 1: 处理TTS流
 	g.Go(func() error {
-		return s.aiClient.HandleCosyVoiceTTS(ctx, sc, llmTextChan, ttsConfig)
+		return s.ttsClient.HandleTTS(ctx, sc, llmTextChan, ttsConfig)
 	})
 
 	// Goroutine 2: 生成LLM响应并发送到channel

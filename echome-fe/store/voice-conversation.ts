@@ -65,7 +65,7 @@ export interface VoiceConversationState {
 function int16ToAudioBuffer(
   ctx: AudioContext,
   int16: Int16Array,
-  sampleRate = 22050,
+  sampleRate = 24000,
 ) {
   const float32 = new Float32Array(int16.length);
   for (let i = 0; i < int16.length; i++) {

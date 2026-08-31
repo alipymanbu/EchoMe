@@ -3,69 +3,73 @@ package aliyun
 import (
 	"bytes"
 	"context"
-	"crypto/tls"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
-
-	"go.uber.org/zap"
+	"strings"
 )
 
-// PerformSearch 执行搜索操作
+// PerformSearch executes the Tavily search tool on behalf of the LLM.
 func (a *AliClient) PerformSearch(ctx context.Context, query string, apiKey string) (string, error) {
-	searchReq := TavilySearchRequest{
-		Query:         query,
-		SearchDepth:   "basic",
-		IncludeAnswer: true,
-		MaxResults:    3,
+	if strings.TrimSpace(apiKey) == "" {
+		return "", fmt.Errorf("Tavily API key is not configured")
 	}
 
-	reqBody, err := json.Marshal(searchReq)
+	requestBody, err := json.Marshal(map[string]any{
+		"api_key":        apiKey,
+		"query":          query,
+		"search_depth":   "basic",
+		"include_answer": true,
+		"max_results":    3,
+	})
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("marshal Tavily request: %w", err)
 	}
 
-	req, err := http.NewRequest("POST", tavilyAPIURL, bytes.NewBuffer(reqBody))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tavilyAPIURL, bytes.NewReader(requestBody))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("create Tavily request: %w", err)
 	}
-
-	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				InsecureSkipVerify: true, // 关闭TLS验证
-			},
-		},
-	}
-	resp, err := client.Do(req)
+	resp, err := a.httpClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("Tavily request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("read Tavily response: %w", err)
+	}
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return "", fmt.Errorf("Tavily search failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 	}
 
 	var searchResp TavilySearchResponse
 	if err := json.Unmarshal(body, &searchResp); err != nil {
-		zap.L().Error("Failed to unmarshal tavily response", zap.String("body", string(body)))
-		return "", err
+		return "", fmt.Errorf("decode Tavily response: %w", err)
 	}
 
-	var searchContext string
+	var searchContext strings.Builder
 	if searchResp.Answer != "" {
-		searchContext += "Search Answer: " + searchResp.Answer + "\n\n"
+		searchContext.WriteString("Search Answer: ")
+		searchContext.WriteString(searchResp.Answer)
+		searchContext.WriteString("\n\n")
 	}
-
 	for _, result := range searchResp.Results {
-		searchContext += "URL: " + result.URL + "\n"
-		searchContext += "Content: " + result.Content + "\n\n"
+		if result.URL != "" {
+			searchContext.WriteString("URL: ")
+			searchContext.WriteString(result.URL)
+			searchContext.WriteByte('\n')
+		}
+		if result.Content != "" {
+			searchContext.WriteString("Content: ")
+			searchContext.WriteString(result.Content)
+			searchContext.WriteString("\n\n")
+		}
 	}
 
-	return searchContext, nil
+	return searchContext.String(), nil
 }

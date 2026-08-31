@@ -101,7 +101,7 @@ export const useVadStore = create(
               });
             },
 
-            // 语音结束：关闭 ASR 连接并回调最终文本
+            // 语音结束：先通知后端提交当前音频，等待最终识别结果后再关闭连接
             onSpeechEnd: () => {
               set({
                 voiceActivity: VoiceActivity.Loading,
@@ -109,12 +109,21 @@ export const useVadStore = create(
                 preSpeechBuffer: [],
               });
               const { socket, transcript } = get();
+              if (socket && socket.readyState === WebSocket.OPEN) {
+                socket.send(JSON.stringify({ type: "finish" }));
+                return;
+              }
+              if (socket && socket.readyState === WebSocket.CONNECTING) {
+                socket.addEventListener(
+                  "open",
+                  () => socket.send(JSON.stringify({ type: "finish" })),
+                  { once: true },
+                );
+                return;
+              }
               if (socket) {
                 socket.close();
-                set({
-                  socket: null,
-                  asrConnectionState: ConnectionState.Disconnected,
-                });
+                set({ socket: null, asrConnectionState: ConnectionState.Disconnected });
               }
               if (transcript) {
                 onSpeechEndCallback(transcript);
@@ -219,10 +228,12 @@ export const useVadStore = create(
                 const text = message.text || "";
                 const isFinal = !!message.sentence_end;
 
+                let finalTranscript = "";
                 set((state) => {
                   const newTranscript = state.committedTranscript + text;
                   let newCommittedTranscript = state.committedTranscript;
                   if (isFinal) {
+                    finalTranscript = newTranscript;
                     newCommittedTranscript = newTranscript
                       ? `${newTranscript} `
                       : state.committedTranscript;
@@ -233,6 +244,11 @@ export const useVadStore = create(
                     committedTranscript: newCommittedTranscript,
                   };
                 });
+
+                if (isFinal && get().voiceActivity === VoiceActivity.Loading && finalTranscript) {
+                  get().onSpeechEndCallback?.(finalTranscript.trim());
+                  newSocket.close();
+                }
               }
             } catch (e) {
               console.error("Failed to parse asr message", e);

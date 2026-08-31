@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/justin/echome-be/config"
-	"github.com/justin/echome-be/internal/domain"
+	"github.com/justin/echome-be/internal/domain/character"
 	"github.com/samber/lo"
 	"go.uber.org/zap"
 	"gorm.io/driver/postgres"
@@ -54,7 +54,7 @@ func main() {
 	zap.L().Info("Running database migrations...")
 
 	// 创建角色表
-	err = db.AutoMigrate(&domain.Character{})
+	err = db.AutoMigrate(&character.Character{})
 	if err != nil {
 		zap.L().Fatal("Failed to migrate characters table", zap.Error(err))
 	}
@@ -67,7 +67,7 @@ func main() {
 
 	// 检查是否需要插入默认数据
 	var count int64
-	db.Model(&domain.Character{}).Count(&count)
+	db.Model(&character.Character{}).Count(&count)
 	if count == 0 {
 		zap.L().Info("No existing characters found, inserting default characters...")
 		insertDefaultCharacters(db)
@@ -78,7 +78,7 @@ func main() {
 
 // insertDefaultCharacters 插入默认角色数据
 func insertDefaultCharacters(db *gorm.DB) {
-	defaultCharacters := []*domain.Character{
+	defaultCharacters := []*character.Character{
 		{
 			ID:          uuid.New(),
 			Name:        "小助手",

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"go.uber.org/zap"
@@ -36,8 +37,13 @@ func sendHeartbeat(ctx context.Context, ws *websocket.Conn, interval time.Durati
 
 // HandleASR 通过阿里云Model Studio Paraformer处理语音识别
 func (client *AliClient) HandleASR(ctx context.Context, clientWS ws.WebSocketConn) error {
+	asrConfig := client.asrConfig
+	if asrConfig.Model == "" {
+		asrConfig = DefaultASRConfig()
+	}
+
 	// 连接到阿里云Model Studio ASR WebSocket
-	asrWS, taskID, err := connectToModelStudioASR(client.apiKey, DefaultASRConfig())
+	asrWS, taskID, err := connectToModelStudioASR(client.endPoint, client.apiKey, asrConfig)
 	if err != nil {
 		return fmt.Errorf("连接Model Studio ASR失败: %w", err)
 	}
@@ -65,9 +71,9 @@ func (client *AliClient) HandleASR(ctx context.Context, clientWS ws.WebSocketCon
 }
 
 // connectToModelStudioASR 连接到阿里云WebSocket实时ASR服务
-func connectToModelStudioASR(apiKey string, config ai.ASRConfig) (*websocket.Conn, string, error) {
+func connectToModelStudioASR(endpoint string, apiKey string, config ai.ASRConfig) (*websocket.Conn, string, error) {
 	// 阿里云WebSocket实时ASR URL
-	url := "wss://dashscope.aliyuncs.com/api-ws/v1/inference"
+	url := websocketEndpoint(endpoint)
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 30 * time.Second,
@@ -159,6 +165,15 @@ func connectToModelStudioASR(apiKey string, config ai.ASRConfig) (*websocket.Con
 	}
 
 	return ws, taskID, nil
+}
+
+func websocketEndpoint(endpoint string) string {
+	base := strings.TrimRight(endpoint, "/")
+	if base == "" {
+		base = "https://dashscope.aliyuncs.com"
+	}
+	base = strings.TrimSuffix(base, "/api-ws/v1/inference")
+	return strings.Replace(base, "https://", "wss://", 1) + "/api-ws/v1/inference"
 }
 
 // forwardAudioToModelStudio 转发音频数据到阿里云WebSocket ASR

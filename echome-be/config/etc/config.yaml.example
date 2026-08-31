@@ -1,34 +1,53 @@
 server:
   port: "8081"
-datebase:
+database:
   host: "localhost"
   port: "5432"
   user: "your_db_user"
   password: "your_db_password"
   db_name: "your_db_name"
+s3:
+  endpoint: "https://s3.example.com"
+  region: "us-east-1"
+  bucket: "echome"
+  access_key_id: "your-access-key-id"
+  secret_access_key: "your-secret-access-key"
+  session_token: ""
+  force_path_style: false
+  presign_expiry_mins: 15
+  max_upload_size_bytes: 10485760
 ai:
-  service_type: "alibailian"
   timeout: 30
   max_retries: 3
-webrtc:
-  stun_server: "stun:stun.example.com:19302"
-tavily:
-  api_key: "your_tavily_api_key"
-aliyun:
-  api_key: "your-alibailian-api-key"
-  endpoint: "https://dashscope.aliyuncs.com"
-  region: "cn-beijing"
   asr:
-    model: "paraformer-realtime-v2"
+    provider: "mimo"
+    model: "mimo-v2.5-asr"
     sample_rate: 16000
     format: "pcm"
     language_hints: ["zh", "en"]
   tts:
-    model: "qwen-tts-realtime"
-    default_voice: "Cherry"
+    provider: "mimo"
+    model: "mimo-v2.5-tts"
+    voice: "mimo_default"
     sample_rate: 24000
-    response_format: "pcm"
+    format: "pcm16"
+    min_segment_runes: 12
+    max_segment_runes: 100
+    max_segment_wait_ms: 800
   llm:
-    model: "qwen-turbo"
+    provider: "mimo"
+    model: "mimo-v2.5"
     temperature: 0.7
     max_tokens: 2000
+webrtc:
+  stun_server: "stun:stun.example.com:19302"
+tavily:
+  api_key: "your_tavily_api_key"
+providers:
+  aliyun:
+    api_key: "your-alibailian-api-key"
+    endpoint: "https://dashscope.aliyuncs.com"
+    region: "cn-beijing"
+  mimo:
+    api_key: "your-mimo-api-key"
+    endpoint: "https://api.xiaomimimo.com/v1"

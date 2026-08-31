@@ -11,5 +11,6 @@ var (
 		NewHandlers,
 		NewCharacterHandlers,
 		NewWebSocketHandlers,
+		NewFileHandlers,
 	)
 )

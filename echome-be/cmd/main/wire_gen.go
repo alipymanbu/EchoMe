@@ -12,9 +12,12 @@ import (
 	character2 "github.com/justin/echome-be/internal/domain/character"
 	"github.com/justin/echome-be/internal/domain/conversation"
 	"github.com/justin/echome-be/internal/handler"
+	"github.com/justin/echome-be/internal/infra"
 	"github.com/justin/echome-be/internal/infra/aliyun"
 	"github.com/justin/echome-be/internal/infra/character"
 	"github.com/justin/echome-be/internal/infra/db"
+	"github.com/justin/echome-be/internal/infra/mimo"
+	"github.com/justin/echome-be/internal/infra/storage"
 )
 
 import (
@@ -38,10 +41,28 @@ func InitializeApplication(configPath2 string) (*app.Application, error) {
 	query := db.NewQuery(dbDB)
 	characterRepository := character.NewCharacterRepository(query)
 	aliClient := aliyun.ProvideAliClient(configConfig)
-	characterService := character2.NewCharacterService(characterRepository, aliClient)
-	tavilyConfig := config.GetTavilyConfig(configConfig)
-	conversationService := conversation.NewConversationService(aliClient, characterService, tavilyConfig)
-	handlers := handler.NewHandlers(characterService, aliClient, conversationService)
-	application := app.NewApplication(configConfig, handlers)
+	client := mimo.ProvideMimoClient(configConfig)
+	asrProvider, err := infra.ProvideASRProvider(configConfig, aliClient, client)
+	if err != nil {
+		return nil, err
+	}
+	llmProvider, err := infra.ProvideLLMProvider(configConfig, aliClient, client)
+	if err != nil {
+		return nil, err
+	}
+	repo := infra.ProvideAIRepo(aliClient, asrProvider, llmProvider)
+	characterService := character2.NewCharacterService(characterRepository, repo)
+	ttsProvider, err := infra.ProvideTTSProvider(configConfig, aliClient, client)
+	if err != nil {
+		return nil, err
+	}
+	conversationService := conversation.NewConversationService(repo, ttsProvider, characterService)
+	objectStorage, err := storage.ProvideObjectStorage(configConfig)
+	if err != nil {
+		return nil, err
+	}
+	int64_2 := config.GetMaxUploadSize(configConfig)
+	handlers := handler.NewHandlers(characterService, repo, conversationService, objectStorage, int64_2)
+	application := app.NewApplication(configConfig, handlers, objectStorage)
 	return application, nil
 }

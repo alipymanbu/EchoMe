@@ -4,6 +4,7 @@ import (
 	"github.com/justin/echome-be/internal/domain/ai"
 	"github.com/justin/echome-be/internal/domain/character"
 	"github.com/justin/echome-be/internal/domain/conversation"
+	"github.com/justin/echome-be/internal/domain/storage"
 	"github.com/labstack/echo/v4"
 )
 
@@ -12,8 +13,8 @@ type Handlers struct {
 }
 
 // NewHandlers
-func NewHandlers(characterService *character.CharacterService, aiService ai.Repo, conversationService *conversation.ConversationService) *Handlers {
-	router := NewRouter(characterService, aiService, conversationService)
+func NewHandlers(characterService *character.CharacterService, aiService ai.Repo, conversationService *conversation.ConversationService, objectStorage storage.ObjectStorage, maxUploadSize int64) *Handlers {
+	router := NewRouter(characterService, aiService, conversationService, objectStorage, maxUploadSize)
 	return &Handlers{
 		router: router,
 	}

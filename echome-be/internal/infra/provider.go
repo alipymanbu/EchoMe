@@ -7,6 +7,8 @@ import (
 	"github.com/justin/echome-be/internal/infra/aliyun"
 	"github.com/justin/echome-be/internal/infra/character"
 	"github.com/justin/echome-be/internal/infra/db"
+	"github.com/justin/echome-be/internal/infra/mimo"
+	storageinfra "github.com/justin/echome-be/internal/infra/storage"
 )
 
 // RepositoryProviderSet 包含所有仓库提供者
@@ -16,5 +18,11 @@ var RepositoryProviderSet = wire.NewSet(
 	character.NewCharacterRepository,
 	wire.Bind(new(dc.Repo), new(*character.CharacterRepository)),
 	aliyun.ProvideAliClient,
-	wire.Bind(new(ai.Repo), new(*aliyun.AliClient)),
+	wire.Bind(new(ai.VoiceProvider), new(*aliyun.AliClient)),
+	mimo.ProvideMimoClient,
+	ProvideASRProvider,
+	ProvideLLMProvider,
+	ProvideAIRepo,
+	ProvideTTSProvider,
+	storageinfra.ProvideObjectStorage,
 )

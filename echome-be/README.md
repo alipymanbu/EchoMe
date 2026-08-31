@@ -57,15 +57,78 @@ make run
 
 #### AI服务配置
 
-##### 阿里云百炼配置
-- `aliyun.api_key`: 阿里云百炼API密钥
-- `aliyun.endpoint`: 阿里云百炼API端点
+ASR、TTS、LLM 在 `ai` 下独立选择提供商和能力参数，提供商的密钥与端点统一放在 `providers` 下：
 
-##### AI服务选择
-- `ai.service_type`: AI服务类型，可选值：`alibailian`
+```yaml
+ai:
+  timeout: 30
+  max_retries: 3
+  asr:
+    provider: "aliyun"
+    model: "paraformer-realtime-v2"
+    sample_rate: 16000
+    format: "pcm"
+    language_hints: ["zh", "en"]
+  tts:
+    provider: "mimo"
+    model: "mimo-v2.5-tts"
+    voice: "mimo_default"
+    sample_rate: 24000
+    format: "pcm16"
+    min_segment_runes: 12
+    max_segment_runes: 100
+    max_segment_wait_ms: 800
+  llm:
+    provider: "aliyun"
+    model: "qwen-turbo"
+    temperature: 0.7
+    max_tokens: 2000
+
+providers:
+  aliyun:
+    api_key: "your-alibailian-api-key"
+    endpoint: "https://dashscope.aliyuncs.com"
+    region: "cn-beijing"
+  mimo:
+    api_key: "your-mimo-api-key"
+    endpoint: "https://api.xiaomimimo.com/v1"
+```
+
+当前支持：阿里云和 MiMo 的 ASR/LLM，以及阿里云和 MiMo 的 TTS；三项能力可以独立切换。切换某项能力只修改对应的 `ai.<capability>.provider`。
+
+MiMo ASR 当前会将前端 WebSocket 上传的 PCM 音频缓存到连接结束，封装为 16-bit 单声道 WAV 后调用 MiMo 识别，因此结果在一次语音片段结束后返回，不是逐字实时结果。
+
+当客户端请求中的 `enable_search` 为 `true` 时，后端会向当前 LLM 发送标准 OpenAI-compatible function tool `tavily_search`。模型决定调用工具后，后端执行 Tavily 搜索，并用标准的 `assistant.tool_calls` + `tool` 消息继续请求 LLM，最终回复仍按原有文本流返回。MiMo 和阿里云兼容模式均支持这套流程；需要在 `tavily.api_key` 中配置密钥。
 
 #### WebRTC配置
 - `webrtc.stun_server`: STUN服务器地址
+
+#### S3兼容对象存储配置
+
+后端提供通用的 S3 兼容对象存储服务，支持 AWS S3、MinIO、阿里云 OSS、Cloudflare R2 等。配置写在 `config/etc/config.yaml` 的 `s3` 节点：
+
+```yaml
+s3:
+  endpoint: "https://s3.example.com"
+  region: "us-east-1"
+  bucket: "echome"
+  access_key_id: "your-access-key-id"
+  secret_access_key: "your-secret-access-key"
+  session_token: ""
+  force_path_style: false
+  presign_expiry_mins: 15
+```
+
+`endpoint` 对 AWS S3 可以留空；MinIO 或其他兼容服务通常需要填写，并按服务要求设置 `force_path_style`。密钥也可以省略，SDK 会使用环境变量、工作负载身份或实例角色等默认凭据链。当前服务已提供上传、下载、删除和预签名 URL 能力，业务代码通过 `internal/domain/storage.ObjectStorage` 接口使用。
+
+文件上传接口：
+
+```http
+POST /api/files
+Content-Type: multipart/form-data
+```
+
+表单字段为 `file`。服务端会生成对象 Key，校验真实文件类型和文件大小（默认 10 MiB），并返回包含 `key`、临时 `url`、`content_type` 和 `size` 的标准 API 响应。前端通过 `/v1/api/files` 调用该接口。
 
 ## API端点
 
