@@ -2,6 +2,11 @@
   "name": "echome-fe",
   "version": "0.1.0",
   "private": true,
+  "trustedDependencies": [
+    "@tailwindcss/oxide",
+    "protobufjs",
+    "sharp"
+  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
